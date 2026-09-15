@@ -141,7 +141,7 @@ fun BypassApp() {
             }
 
             composable(Screen.Preview.route) {
-                PreviewScreen()
+                PreviewScreen(workspace = aiSession.workspace)
             }
 
             composable(Screen.Dev.route) {

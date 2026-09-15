@@ -295,10 +295,13 @@ object ActionParser {
         relativePath: String
     ): File {
 
-        val cleanPath =
-            relativePath
-                .replace("\\", "/")
-                .trimStart('/')
+        val cleanPath = relativePath
+            .replace("\\", "/")
+            .replace(Regex("/+"), "/")
+            .replace(Regex("/\\s+"), "/")
+            .replace(Regex("\\s+/"), "/")
+            .trim()
+            .trimStart('/')
 
         val root =
             workspace.canonicalFile

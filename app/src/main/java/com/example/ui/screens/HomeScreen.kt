@@ -1,10 +1,30 @@
 package com.example.ui.screens
 
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.ai.ActionParser
@@ -18,30 +38,33 @@ fun HomeScreen(
 ) {
     var prompt by remember { mutableStateOf("") }
     var isThinking by remember { mutableStateOf(false) }
-    val messages = remember { mutableStateListOf<Pair<String, Boolean>>() }
     val scope = rememberCoroutineScope()
+
+    val messages = aiSession.chatHistory
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
+            .padding(12.dp)
     ) {
+
         Text(
             text = "BYPASS IDE",
             style = MaterialTheme.typography.headlineSmall
         )
-
-        Spacer(modifier = Modifier.height(4.dp))
 
         Text(
             text = "Advanced Root AI Engine",
             style = MaterialTheme.typography.bodyMedium
         )
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
         Card(
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
         ) {
             Column(
                 modifier = Modifier.padding(12.dp)
@@ -58,21 +81,37 @@ fun HomeScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
         LazyColumn(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(messages) { message ->
+
+            items(
+                items = messages,
+                key = { message ->
+                    "${message.hashCode()}-${message.text.take(20)}"
+                }
+            ) { message ->
+
                 Card(
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor =
+                            if (message.isUser)
+                                MaterialTheme.colorScheme.primaryContainer
+                            else
+                                MaterialTheme.colorScheme.surface
+                    )
                 ) {
                     Text(
-                        text = message.first,
-                        modifier = Modifier.padding(12.dp)
+                        text = message.text,
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodyMedium
                     )
                 }
             }
@@ -97,6 +136,7 @@ fun HomeScreen(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+
             OutlinedTextField(
                 value = prompt,
                 onValueChange = { prompt = it },
@@ -109,50 +149,84 @@ fun HomeScreen(
 
             Button(
                 onClick = {
+
                     val userPrompt = prompt.trim()
 
-                    if (userPrompt.isEmpty() || isThinking) {
+                    if (
+                        userPrompt.isEmpty() ||
+                        isThinking
+                    ) {
                         return@Button
                     }
 
                     prompt = ""
-                    messages.add(userPrompt to true)
                     isThinking = true
 
                     scope.launch {
+
                         try {
-                            val response = aiSession.generateResponse(userPrompt)
 
-                            messages.add(response to false)
+                            val response =
+                                aiSession.generateResponse(userPrompt)
 
-                            val actions = ActionParser.parse(response)
+                            val actions =
+                                ActionParser.parse(response)
 
                             if (actions.isNotEmpty()) {
-                                val workspace = aiSession.getWorkspace()
 
-                                val results = ActionParser.execute(
-                                    actions = actions,
-                                    workspace = workspace
-                                )
-
-                                if (results.isNotEmpty()) {
-                                    messages.add(
-                                        results.joinToString("\n") to false
+                                val results =
+                                    ActionParser.execute(
+                                        actions = actions,
+                                        workspace = aiSession.workspace
                                     )
 
-                                    if (
-                                        results.any {
-                                            it.startsWith("PREVIEW_READY:")
-                                        }
-                                    ) {
-                                        onOpenPreview?.invoke()
-                                    }
+                                if (results.isNotEmpty()) {
+
+                                    val resultText =
+                                        results.joinToString("\n")
+
+                                    aiSession.chatHistory.add(
+                                        com.example.ai.AiMessage(
+                                            text = resultText,
+                                            isUser = false
+                                        )
+                                    )
                                 }
                             }
+
+                            /*
+                             * If the user's request is about opening/
+                             * viewing Live Preview, open it after the
+                             * generated files have been written.
+                             */
+                            val wantsPreview =
+                                userPrompt.contains(
+                                    "preview",
+                                    ignoreCase = true
+                                ) ||
+                                userPrompt.contains(
+                                    "live preview",
+                                    ignoreCase = true
+                                )
+
+                            if (wantsPreview) {
+                                onOpenPreview?.invoke()
+                            }
+
                         } catch (e: Exception) {
-                            messages.add(
-                                "Error: ${e.message ?: "Unknown error"}" to false
+
+                            aiSession.chatHistory.add(
+                                com.example.ai.AiMessage(
+                                    text =
+                                        "Error: ${
+                                            e.message
+                                                ?: "Unknown error"
+                                        }",
+                                    isUser = false,
+                                    isError = true
+                                )
                             )
+
                         } finally {
                             isThinking = false
                         }
