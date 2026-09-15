@@ -50,6 +50,7 @@ class AiSession(context: Context) {
     /**
      * Shared workspace used by AI actions, Files and Preview.
      */
+    @get:JvmName("workspaceFile")
     val workspace: File by lazy {
         File(
             appContext.getExternalFilesDir(null),
@@ -189,6 +190,13 @@ class AiSession(context: Context) {
         } catch (_: Exception) {
             "Workspace: ${workspace.absolutePath}"
         }
+    }
+
+    fun getWorkspace(): File {
+        if (!workspace.exists()) {
+            workspace.mkdirs()
+        }
+        return workspace
     }
 
     fun activateGemini(key: String) {
