@@ -27,10 +27,7 @@ class GeminiAiProvider(
     private val models = listOf(
         "gemini-3.8-flash",
         "gemini-3.7-flash",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.1-flash-lite"
+        "gemini-3.6-flash"
     )
 
     override suspend fun generateResponse(
@@ -51,14 +48,11 @@ class GeminiAiProvider(
 
             for (model in models) {
 
-                var attempt = 0
-
-                while (attempt < 2) {
-                    attempt++
+                for (attempt in 1..2) {
 
                     try {
 
-                        val result = callGemini(
+                        val result = requestGemini(
                             model = model,
                             messages = messages,
                             context = context
@@ -70,35 +64,34 @@ class GeminiAiProvider(
 
                         lastError = result.second
 
-                        val retryable =
-                            result.second.startsWith("RETRYABLE:")
-
-                        if (!retryable) {
+                        if (!result.second.startsWith("RETRY:")) {
                             break
                         }
 
-                        delay(1000L * attempt)
+                        if (attempt < 2) {
+                            delay(1500L)
+                        }
 
                     } catch (e: Exception) {
 
                         lastError =
-                            e.message ?: "Unknown connection error"
+                            "Connection error: ${e.message ?: "Unknown error"}"
 
                         if (attempt < 2) {
-                            delay(1000L * attempt)
+                            delay(1500L)
                         }
                     }
                 }
             }
 
             AiResponse(
-                "Gemini unavailable. Tried all supported models.\n\n$lastError",
+                "Gemini request failed.\n\n$lastError",
                 true
             )
         }
     }
 
-    private fun callGemini(
+    private fun requestGemini(
         model: String,
         messages: List<AiMessage>,
         context: String
@@ -107,15 +100,15 @@ class GeminiAiProvider(
         val url =
             "https://generativelanguage.googleapis.com/v1/interactions"
 
-        val systemInstruction = """
+        val systemText = """
             You are Bypass IDE AI Assistant.
 
-            You are an expert Android developer, Kotlin developer,
-            web developer and autonomous coding assistant.
+            You are an expert Android, Kotlin, Java, web and software
+            development assistant.
 
-            Help the user build applications, websites and software.
+            Help the user create applications and code.
 
-            When creating project files, use these action formats:
+            When the user asks you to create files, use:
 
             <file path="index.html">
             file content
@@ -127,36 +120,45 @@ class GeminiAiProvider(
             command
             </command>
 
-            Be practical and concise.
+            Keep normal answers clear and practical.
 
             Project context:
             $context
         """.trimIndent()
 
-        val input = buildString {
+        val input = JSONArray()
 
-            append(systemInstruction)
-            append("\n\nConversation:\n")
+        input.put(
+            JSONObject()
+                .put("role", "user")
+                .put(
+                    "content",
+                    systemText
+                )
+        )
 
-            messages.forEach { message ->
+        messages.forEach { message ->
 
-                if (!message.isLoading && !message.isError) {
+            if (!message.isLoading && !message.isError) {
 
-                    val role =
-                        if (message.isUser) "User"
-                        else "Assistant"
-
-                    append(role)
-                    append(": ")
-                    append(message.text)
-                    append("\n\n")
-                }
+                input.put(
+                    JSONObject()
+                        .put(
+                            "role",
+                            if (message.isUser) "user" else "model"
+                        )
+                        .put(
+                            "content",
+                            message.text
+                        )
+                )
             }
-        }.trim()
+        }
 
         val body = JSONObject()
             .put("model", model)
             .put("input", input)
+            .put("store", false)
             .toString()
 
         val request = Request.Builder()
@@ -172,23 +174,23 @@ class GeminiAiProvider(
 
         client.newCall(request).execute().use { response ->
 
-            val responseText =
-                response.body?.string().orEmpty()
+            val raw = response.body?.string().orEmpty()
 
             if (!response.isSuccessful) {
 
-                val errorMessage =
-                    try {
-                        JSONObject(responseText)
-                            .optJSONObject("error")
-                            ?.optString("message")
-                            ?.takeIf { it.isNotBlank() }
-                            ?: responseText
-                    } catch (_: Exception) {
-                        responseText
-                    }
+                val errorMessage = try {
 
-                val retryable =
+                    JSONObject(raw)
+                        .optJSONObject("error")
+                        ?.optString("message")
+                        ?.takeIf { it.isNotBlank() }
+                        ?: raw
+
+                } catch (_: Exception) {
+                    raw
+                }
+
+                val retry =
                     response.code == 408 ||
                     response.code == 429 ||
                     response.code == 500 ||
@@ -196,69 +198,164 @@ class GeminiAiProvider(
                     response.code == 503 ||
                     response.code == 504
 
-                return if (retryable) {
+                return if (retry) {
                     false to
-                        "RETRYABLE: $model -> HTTP ${response.code}: $errorMessage"
+                        "RETRY: $model HTTP ${response.code}: $errorMessage"
                 } else {
                     false to
-                        "$model -> HTTP ${response.code}: $errorMessage"
+                        "$model HTTP ${response.code}: $errorMessage"
                 }
             }
 
-            val json =
-                JSONObject(responseText)
+            return parseResponse(raw, model)
+        }
+    }
 
-            val steps =
-                json.optJSONArray("steps")
+    private fun parseResponse(
+        raw: String,
+        model: String
+    ): Pair<Boolean, String> {
 
-            if (steps == null || steps.length() == 0) {
-                return false to
-                    "RETRYABLE: $model returned no steps."
+        if (raw.isBlank()) {
+            return false to "RETRY: $model returned an empty HTTP response."
+        }
+
+        return try {
+
+            val json = JSONObject(raw)
+
+            /*
+             * First try the simple output field.
+             */
+            val directOutput = json.optString("output")
+
+            if (directOutput.isNotBlank()) {
+                return true to directOutput.trim()
             }
 
-            val answer = StringBuilder()
+            /*
+             * Interactions API can return output as an array.
+             */
+            val outputArray = json.optJSONArray("output")
 
-            for (i in 0 until steps.length()) {
+            if (outputArray != null) {
 
-                val step =
-                    steps.optJSONObject(i)
+                val text = StringBuilder()
+
+                for (i in 0 until outputArray.length()) {
+
+                    val item = outputArray.optJSONObject(i)
                         ?: continue
 
-                if (step.optString("type") != "model_output") {
-                    continue
-                }
+                    val type = item.optString("type")
 
-                val content =
-                    step.optJSONArray("content")
-                        ?: continue
+                    if (type == "text" ||
+                        type == "output_text" ||
+                        type == "model_output"
+                    ) {
 
-                for (j in 0 until content.length()) {
-
-                    val item =
-                        content.optJSONObject(j)
-                            ?: continue
-
-                    if (item.optString("type") == "text") {
-
-                        val text =
+                        val value =
                             item.optString("text")
 
-                        if (text.isNotBlank()) {
-                            answer.append(text)
+                        if (value.isNotBlank()) {
+                            text.append(value)
+                        }
+
+                        val content =
+                            item.optJSONArray("content")
+
+                        if (content != null) {
+                            for (j in 0 until content.length()) {
+
+                                val part =
+                                    content.optJSONObject(j)
+                                        ?: continue
+
+                                val partText =
+                                    part.optString("text")
+
+                                if (partText.isNotBlank()) {
+                                    text.append(partText)
+                                }
+                            }
                         }
                     }
                 }
+
+                if (text.isNotBlank()) {
+                    return true to text.toString().trim()
+                }
             }
 
-            val finalAnswer =
-                answer.toString().trim()
+            /*
+             * Try steps[] used by some Interactions responses.
+             */
+            val steps = json.optJSONArray("steps")
 
-            if (finalAnswer.isBlank()) {
-                return false to
-                    "RETRYABLE: $model returned an empty response."
+            if (steps != null) {
+
+                val text = StringBuilder()
+
+                for (i in 0 until steps.length()) {
+
+                    val step =
+                        steps.optJSONObject(i)
+                            ?: continue
+
+                    val content =
+                        step.optJSONArray("content")
+
+                    if (content != null) {
+
+                        for (j in 0 until content.length()) {
+
+                            val item =
+                                content.optJSONObject(j)
+                                    ?: continue
+
+                            val itemText =
+                                item.optString("text")
+
+                            if (itemText.isNotBlank()) {
+                                text.append(itemText)
+                            }
+                        }
+                    }
+
+                    val stepText =
+                        step.optString("text")
+
+                    if (stepText.isNotBlank()) {
+                        text.append(stepText)
+                    }
+                }
+
+                if (text.isNotBlank()) {
+                    return true to text.toString().trim()
+                }
             }
 
-            return true to finalAnswer
+            /*
+             * Debug-safe fallback:
+             * do NOT leave the UI stuck on Thinking.
+             */
+            val status =
+                json.optString("status")
+
+            val id =
+                json.optString("id")
+
+            false to """
+                Gemini returned no readable text.
+                Model: $model
+                Status: ${if (status.isBlank()) "unknown" else status}
+                Response ID: ${if (id.isBlank()) "unknown" else id}
+            """.trimIndent()
+
+        } catch (e: Exception) {
+
+            false to
+                "Gemini response parsing failed: ${e.message}"
         }
     }
 }
