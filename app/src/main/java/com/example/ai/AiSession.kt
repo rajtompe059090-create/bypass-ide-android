@@ -48,7 +48,7 @@ class AiSession(context: Context) {
         mutableStateListOf<AiMessage>()
 
     /**
-     * Shared workspace used by Files, Agent actions and Preview.
+     * Shared workspace used by AI actions, Files and Preview.
      */
     val workspace: File by lazy {
         File(
@@ -68,7 +68,9 @@ class AiSession(context: Context) {
 
         selectedProviderState =
             try {
-                AiProviderState.valueOf(savedProvider ?: AiProviderState.GEMINI.name)
+                AiProviderState.valueOf(
+                    savedProvider ?: AiProviderState.GEMINI.name
+                )
             } catch (_: Exception) {
                 AiProviderState.GEMINI
             }
@@ -89,9 +91,13 @@ class AiSession(context: Context) {
     }
 
     /**
-     * Send a prompt to the currently selected AI provider.
+     * Sends the user's prompt to the active AI provider.
+     *
+     * Uses the project's actual AiProvider interface:
+     * generateResponse(messages, context)
      */
     suspend fun generateResponse(prompt: String): String {
+
         val cleanPrompt = prompt.trim()
 
         if (cleanPrompt.isEmpty()) {
@@ -99,40 +105,89 @@ class AiSession(context: Context) {
         }
 
         val userMessage = AiMessage(
-            role = "user",
-            content = cleanPrompt
+            text = cleanPrompt,
+            isUser = true
         )
 
         chatHistory.add(userMessage)
 
         return try {
-            val result = _provider.value.generate(
-                messages = chatHistory.toList()
+
+            val result = _provider.value.generateResponse(
+                messages = chatHistory.toList(),
+                context = buildWorkspaceContext()
             )
 
-            chatHistory.add(
-                AiMessage(
-                    role = "assistant",
-                    content = result
+            val responseText = result.text
+
+            if (responseText.isNotBlank()) {
+                chatHistory.add(
+                    AiMessage(
+                        text = responseText,
+                        isUser = false,
+                        isError = result.isError
+                    )
                 )
-            )
+            }
 
-            result
+            responseText
+
         } catch (e: Exception) {
-            val error =
-                e.message ?: "Unknown AI error"
 
-            val message =
-                "Gemini API Error: $error"
+            val errorText =
+                "Gemini API Error: ${e.message ?: "Unknown error"}"
 
             chatHistory.add(
                 AiMessage(
-                    role = "assistant",
-                    content = message
+                    text = errorText,
+                    isUser = false,
+                    isError = true
                 )
             )
 
-            message
+            errorText
+        }
+    }
+
+    /**
+     * Gives the AI basic information about the current workspace.
+     */
+    private fun buildWorkspaceContext(): String {
+
+        return try {
+
+            if (!workspace.exists()) {
+                workspace.mkdirs()
+            }
+
+            val files = workspace
+                .walkTopDown()
+                .filter { it.isFile }
+                .take(100)
+                .map {
+                    it.relativeTo(workspace).path
+                }
+                .toList()
+
+            buildString {
+                append("Workspace: ")
+                append(workspace.absolutePath)
+                append("\n")
+
+                if (files.isEmpty()) {
+                    append("Files: (empty)")
+                } else {
+                    append("Files:\n")
+                    files.forEach {
+                        append("- ")
+                        append(it)
+                        append("\n")
+                    }
+                }
+            }
+
+        } catch (_: Exception) {
+            "Workspace: ${workspace.absolutePath}"
         }
     }
 

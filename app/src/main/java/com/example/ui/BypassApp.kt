@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -19,10 +20,22 @@ import com.example.ui.components.BypassBottomNav
 import com.example.ui.components.BypassTopBar
 import com.example.ui.components.RootStatusBanner
 import com.example.ui.navigation.Screen
-import com.example.ui.screens.*
+import com.example.ui.screens.EditorScreen
+import com.example.ui.screens.FilesScreen
+import com.example.ui.screens.HomeScreen
+import com.example.ui.screens.PreviewScreen
+import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.TerminalScreen
+import com.example.ui.screens.DevScreen
 
 @Composable
 fun BypassApp() {
+
+    val context = LocalContext.current
+
+    val aiSession = remember(context) {
+        AiSession(context)
+    }
 
     val navController = rememberNavController()
 
@@ -34,17 +47,6 @@ fun BypassApp() {
 
     var showRootBanner by
         remember { mutableStateOf(true) }
-
-    /*
-     * One shared AI session for the whole application.
-     * This keeps Gemini API key, provider, chat history
-     * and workspace consistent between screens.
-     */
-    val aiSession = remember {
-        AiSession(
-            androidx.compose.ui.platform.LocalContext.current
-        )
-    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -59,14 +61,14 @@ fun BypassApp() {
                         )
                     },
                     onRunClick = {
-                        // Run action can be connected later.
+                        // Run action handled by individual screens.
                     }
                 )
 
                 if (showRootBanner) {
                     RootStatusBanner(
                         onGrantRoot = {
-                            // Root handling can be connected later.
+                            // Root access can be added later.
                         },
                         onDismiss = {
                             showRootBanner = false
@@ -77,6 +79,7 @@ fun BypassApp() {
         },
 
         bottomBar = {
+
             if (currentRoute != Screen.Settings.route) {
 
                 BypassBottomNav(
@@ -113,9 +116,7 @@ fun BypassApp() {
                     onOpenPreview = {
                         navController.navigate(
                             Screen.Preview.route
-                        ) {
-                            launchSingleTop = true
-                        }
+                        )
                     }
                 )
             }
