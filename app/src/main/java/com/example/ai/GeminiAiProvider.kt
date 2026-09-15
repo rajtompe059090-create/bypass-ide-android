@@ -10,77 +10,181 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-class GeminiAiProvider(private val apiKey: String) : AiProvider {
-    override val name = "Gemini 1.5 Pro"
+class GeminiAiProvider(
+    private val apiKey: String
+) : AiProvider {
+
+    override val name = "Gemini 2.5 Flash"
     override val isConfigured = apiKey.isNotBlank()
-    
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(60, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         .build()
 
-    override suspend fun generateResponse(messages: List<AiMessage>, context: String): AiResponse {
-        if (!isConfigured) {
-            return AiResponse("Gemini API key is not configured.", isError = true)
+    override suspend fun generateResponse(
+        messages: List<AiMessage>,
+        context: String
+    ): AiResponse {
+
+        if (apiKey.isBlank()) {
+            return AiResponse(
+                "Gemini API key is missing. Open Settings and add your API key.",
+                true
+            )
         }
 
         return withContext(Dispatchers.IO) {
             try {
-                val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=\$apiKey"
-                
+                val url =
+                    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey"
+
                 val contents = JSONArray()
-                
-                // Add system context if provided
-                val fullContext = if (context.isNotBlank()) {
-                    "You are the Bypass IDE AI Assistant. You help users build projects. You can return actions like <file path=\"index.html\">content</file>, <mkdir path=\"css\"/>, <command>npm install</command>.\n\nProject Context:\n\$context"
-                } else {
-                    "You are the Bypass IDE AI Assistant. You help users build projects. You can return actions like <file path=\"index.html\">content</file>, <mkdir path=\"css\"/>, <command>npm install</command>."
+
+                messages.forEach { message ->
+                    if (!message.isLoading && !message.isError) {
+
+                        contents.put(
+                            JSONObject()
+                                .put(
+                                    "role",
+                                    if (message.isUser) "user" else "model"
+                                )
+                                .put(
+                                    "parts",
+                                    JSONArray().put(
+                                        JSONObject().put("text", message.text)
+                                    )
+                                )
+                        )
+                    }
                 }
-                
-                // Build history
-                for (msg in messages) {
-                    if (msg.isLoading || msg.isError) continue
-                    val part = JSONObject().put("text", msg.text)
-                    val content = JSONObject()
-                        .put("role", if (msg.isUser) "user" else "model")
-                        .put("parts", JSONArray().put(part))
-                    contents.put(content)
-                }
-                
-                val systemInstruction = JSONObject().put("parts", JSONArray().put(JSONObject().put("text", fullContext)))
-                
-                val requestBody = JSONObject()
+
+                val systemText = """
+                    You are Bypass IDE AI Assistant.
+
+                    Help the user build Android applications, websites,
+                    software projects and code.
+
+                    You can create project actions using:
+
+                    <file path="index.html">
+                    file content
+                    </file>
+
+                    <mkdir path="css"/>
+
+                    <command>
+                    command
+                    </command>
+
+                    Be practical and concise.
+
+                    Project context:
+                    $context
+                """.trimIndent()
+
+                val body = JSONObject()
+                    .put(
+                        "systemInstruction",
+                        JSONObject().put(
+                            "parts",
+                            JSONArray().put(
+                                JSONObject().put("text", systemText)
+                            )
+                        )
+                    )
                     .put("contents", contents)
-                    .put("systemInstruction", systemInstruction)
+                    .put(
+                        "generationConfig",
+                        JSONObject()
+                            .put("temperature", 0.7)
+                            .put("maxOutputTokens", 8192)
+                    )
                     .toString()
 
                 val request = Request.Builder()
                     .url(url)
-                    .post(requestBody.toRequestBody("application/json".toMediaType()))
+                    .addHeader("Content-Type", "application/json")
+                    .post(
+                        body.toRequestBody(
+                            "application/json".toMediaType()
+                        )
+                    )
                     .build()
 
-                val response = client.newCall(request).execute()
-                val responseBody = response.body?.string() ?: ""
+                client.newCall(request).execute().use { response ->
 
-                if (response.isSuccessful) {
-                    val json = JSONObject(responseBody)
-                    val candidates = json.optJSONArray("candidates")
-                    if (candidates != null && candidates.length() > 0) {
-                        val firstCandidate = candidates.getJSONObject(0)
-                        val content = firstCandidate.optJSONObject("content")
-                        val parts = content?.optJSONArray("parts")
-                        if (parts != null && parts.length() > 0) {
-                            val text = parts.getJSONObject(0).optString("text")
-                            return@withContext AiResponse(text)
+                    val responseText =
+                        response.body?.string().orEmpty()
+
+                    if (!response.isSuccessful) {
+
+                        val message = try {
+                            JSONObject(responseText)
+                                .optJSONObject("error")
+                                ?.optString("message")
+                                ?: responseText
+                        } catch (_: Exception) {
+                            responseText
                         }
+
+                        return@withContext AiResponse(
+                            "Gemini API Error ${response.code}: $message",
+                            true
+                        )
                     }
-                    AiResponse("Empty response from Gemini API.", isError = true)
-                } else {
-                    AiResponse("Error: \${response.code} \${response.message}\\n\$responseBody", isError = true)
+
+                    val json = JSONObject(responseText)
+
+                    val candidates =
+                        json.optJSONArray("candidates")
+
+                    if (candidates == null || candidates.length() == 0) {
+                        return@withContext AiResponse(
+                            "Gemini returned no candidates.",
+                            true
+                        )
+                    }
+
+                    val parts =
+                        candidates
+                            .getJSONObject(0)
+                            .optJSONObject("content")
+                            ?.optJSONArray("parts")
+
+                    if (parts == null) {
+                        return@withContext AiResponse(
+                            "Gemini returned an empty response.",
+                            true
+                        )
+                    }
+
+                    val answer = buildString {
+                        for (i in 0 until parts.length()) {
+                            append(
+                                parts.getJSONObject(i)
+                                    .optString("text")
+                            )
+                        }
+                    }.trim()
+
+                    if (answer.isBlank()) {
+                        AiResponse(
+                            "Gemini returned an empty response.",
+                            true
+                        )
+                    } else {
+                        AiResponse(answer)
+                    }
                 }
+
             } catch (e: Exception) {
-                AiResponse("Exception: \${e.message}", isError = true)
+                AiResponse(
+                    "Gemini connection failed: ${e.message ?: "Unknown error"}",
+                    true
+                )
             }
         }
     }
