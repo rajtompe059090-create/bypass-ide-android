@@ -191,14 +191,6 @@ class AiSession(context: Context) {
         }
     }
 
-    fun getWorkspace(): File {
-        if (!workspace.exists()) {
-            workspace.mkdirs()
-        }
-
-        return workspace
-    }
-
     fun activateGemini(key: String) {
         apiKey = key
         selectedProviderState = AiProviderState.GEMINI
