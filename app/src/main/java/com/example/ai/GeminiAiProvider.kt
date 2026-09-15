@@ -7,6 +7,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -14,7 +15,7 @@ class GeminiAiProvider(
     private val apiKey: String
 ) : AiProvider {
 
-    override val name = "Gemini 3.7 Flash"
+    override val name = "Gemini 3.8 Flash"
     override val isConfigured = apiKey.isNotBlank()
 
     private val client = OkHttpClient.Builder()
@@ -24,9 +25,12 @@ class GeminiAiProvider(
         .build()
 
     private val models = listOf(
+        "gemini-3.8-flash",
         "gemini-3.7-flash",
         "gemini-3.6-flash",
-        "gemini-3.5-flash"
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite"
     )
 
     override suspend fun generateResponse(
@@ -43,11 +47,9 @@ class GeminiAiProvider(
 
         return withContext(Dispatchers.IO) {
 
-            val conversation = buildConversation(messages, context)
-
             var lastError = "Unknown Gemini error"
 
-            for ((index, model) in models.withIndex()) {
+            for (model in models) {
 
                 var attempt = 0
 
@@ -55,28 +57,27 @@ class GeminiAiProvider(
                     attempt++
 
                     try {
+
                         val result = callGemini(
                             model = model,
-                            input = conversation
+                            messages = messages,
+                            context = context
                         )
 
-                        if (result.success) {
-                            return@withContext AiResponse(
-                                result.text
-                            )
+                        if (result.first) {
+                            return@withContext AiResponse(result.second)
                         }
 
-                        lastError = result.text
+                        lastError = result.second
 
-                        /*
-                         * Retry temporary server/capacity errors.
-                         */
-                        if (isRetryable(result.code)) {
-                            delay(1500L * attempt)
-                            continue
+                        val retryable =
+                            result.second.startsWith("RETRYABLE:")
+
+                        if (!retryable) {
+                            break
                         }
 
-                        break
+                        delay(1000L * attempt)
 
                     } catch (e: Exception) {
 
@@ -84,60 +85,84 @@ class GeminiAiProvider(
                             e.message ?: "Unknown connection error"
 
                         if (attempt < 2) {
-                            delay(1500L * attempt)
+                            delay(1000L * attempt)
                         }
                     }
-                }
-
-                /*
-                 * Move to the next model after temporary failure.
-                 */
-                if (index < models.lastIndex) {
-                    continue
                 }
             }
 
             AiResponse(
-                "Gemini API Error: $lastError",
+                "Gemini unavailable. Tried all supported models.\n\n$lastError",
                 true
             )
         }
     }
 
-    private suspend fun callGemini(
+    private fun callGemini(
         model: String,
-        input: String
-    ): GeminiResult {
+        messages: List<AiMessage>,
+        context: String
+    ): Pair<Boolean, String> {
 
         val url =
-            "https://generativelanguage.googleapis.com/v1beta/interactions"
+            "https://generativelanguage.googleapis.com/v1/interactions"
+
+        val systemInstruction = """
+            You are Bypass IDE AI Assistant.
+
+            You are an expert Android developer, Kotlin developer,
+            web developer and autonomous coding assistant.
+
+            Help the user build applications, websites and software.
+
+            When creating project files, use these action formats:
+
+            <file path="index.html">
+            file content
+            </file>
+
+            <mkdir path="css"/>
+
+            <command>
+            command
+            </command>
+
+            Be practical and concise.
+
+            Project context:
+            $context
+        """.trimIndent()
+
+        val input = buildString {
+
+            append(systemInstruction)
+            append("\n\nConversation:\n")
+
+            messages.forEach { message ->
+
+                if (!message.isLoading && !message.isError) {
+
+                    val role =
+                        if (message.isUser) "User"
+                        else "Assistant"
+
+                    append(role)
+                    append(": ")
+                    append(message.text)
+                    append("\n\n")
+                }
+            }
+        }.trim()
 
         val body = JSONObject()
             .put("model", model)
             .put("input", input)
-            .put("store", false)
-            .put(
-                "generation_config",
-                JSONObject()
-                    .put("temperature", 0.7)
-                    .put("max_output_tokens", 8192)
-            )
             .toString()
 
         val request = Request.Builder()
             .url(url)
-            .addHeader(
-                "Content-Type",
-                "application/json"
-            )
-            .addHeader(
-                "x-goog-api-key",
-                apiKey
-            )
-            .addHeader(
-                "Api-Revision",
-                "2026-05-20"
-            )
+            .addHeader("Content-Type", "application/json")
+            .addHeader("x-goog-api-key", apiKey)
             .post(
                 body.toRequestBody(
                     "application/json".toMediaType()
@@ -152,54 +177,43 @@ class GeminiAiProvider(
 
             if (!response.isSuccessful) {
 
-                val message = try {
+                val errorMessage =
+                    try {
+                        JSONObject(responseText)
+                            .optJSONObject("error")
+                            ?.optString("message")
+                            ?.takeIf { it.isNotBlank() }
+                            ?: responseText
+                    } catch (_: Exception) {
+                        responseText
+                    }
 
-                    JSONObject(responseText)
-                        .optJSONObject("error")
-                        ?.optString("message")
-                        ?.takeIf { it.isNotBlank() }
-                        ?: responseText
+                val retryable =
+                    response.code == 408 ||
+                    response.code == 429 ||
+                    response.code == 500 ||
+                    response.code == 502 ||
+                    response.code == 503 ||
+                    response.code == 504
 
-                } catch (_: Exception) {
-                    responseText
+                return if (retryable) {
+                    false to
+                        "RETRYABLE: $model -> HTTP ${response.code}: $errorMessage"
+                } else {
+                    false to
+                        "$model -> HTTP ${response.code}: $errorMessage"
                 }
-
-                return GeminiResult(
-                    success = false,
-                    text = "HTTP ${response.code}: $message",
-                    code = response.code
-                )
             }
 
-            val json = JSONObject(responseText)
-
-            /*
-             * Interactions API response:
-             *
-             * {
-             *   "steps": [
-             *     {
-             *       "type": "model_output",
-             *       "content": [
-             *         {
-             *           "type": "text",
-             *           "text": "..."
-             *         }
-             *       ]
-             *     }
-             *   ]
-             * }
-             */
+            val json =
+                JSONObject(responseText)
 
             val steps =
                 json.optJSONArray("steps")
 
             if (steps == null || steps.length() == 0) {
-                return GeminiResult(
-                    success = false,
-                    text = "Gemini returned no output steps.",
-                    code = 200
-                )
+                return false to
+                    "RETRYABLE: $model returned no steps."
             }
 
             val answer = StringBuilder()
@@ -210,10 +224,7 @@ class GeminiAiProvider(
                     steps.optJSONObject(i)
                         ?: continue
 
-                if (
-                    step.optString("type") !=
-                    "model_output"
-                ) {
+                if (step.optString("type") != "model_output") {
                     continue
                 }
 
@@ -227,10 +238,7 @@ class GeminiAiProvider(
                         content.optJSONObject(j)
                             ?: continue
 
-                    if (
-                        item.optString("type") ==
-                        "text"
-                    ) {
+                    if (item.optString("type") == "text") {
 
                         val text =
                             item.optString("text")
@@ -246,103 +254,11 @@ class GeminiAiProvider(
                 answer.toString().trim()
 
             if (finalAnswer.isBlank()) {
-                return GeminiResult(
-                    success = false,
-                    text = "Gemini returned an empty response.",
-                    code = 200
-                )
+                return false to
+                    "RETRYABLE: $model returned an empty response."
             }
 
-            return GeminiResult(
-                success = true,
-                text = finalAnswer,
-                code = 200
-            )
+            return true to finalAnswer
         }
     }
-
-    private fun buildConversation(
-        messages: List<AiMessage>,
-        context: String
-    ): String {
-
-        val systemText = """
-            You are Bypass IDE AI Assistant.
-
-            Help the user build Android applications,
-            websites, software projects and code.
-
-            You can create project actions using:
-
-            <file path="index.html">
-            file content
-            </file>
-
-            <edit_file path="index.html">
-            file content
-            </edit_file>
-
-            <append_file path="index.html">
-            content to append
-            </append_file>
-
-            <mkdir path="css"/>
-
-            <command>
-            command
-            </command>
-
-            Be practical and concise.
-
-            When the user asks you to create or modify
-            a project, return the required action tags
-            so Bypass IDE can execute them.
-
-            Project context:
-            $context
-        """.trimIndent()
-
-        return buildString {
-
-            append("SYSTEM:\n")
-            append(systemText)
-            append("\n\n")
-
-            messages.forEach { message ->
-
-                if (
-                    !message.isLoading &&
-                    !message.isError
-                ) {
-
-                    append(
-                        if (message.isUser)
-                            "USER:\n"
-                        else
-                            "ASSISTANT:\n"
-                    )
-
-                    append(message.text)
-                    append("\n\n")
-                }
-            }
-
-            append("ASSISTANT:\n")
-        }
-    }
-
-    private fun isRetryable(code: Int): Boolean {
-        return code == 408 ||
-               code == 429 ||
-               code == 500 ||
-               code == 502 ||
-               code == 503 ||
-               code == 504
-    }
-
-    private data class GeminiResult(
-        val success: Boolean,
-        val text: String,
-        val code: Int
-    )
 }
