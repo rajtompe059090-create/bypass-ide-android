@@ -1,170 +1,334 @@
 package com.example.ai
 
-import com.example.ui.screens.AppState
-import android.util.Log
 import java.io.File
 
 object ActionParser {
+
     data class ParsedAction(
         val type: ActionType,
-        val path: String?,
-        val content: String?
+        val content: String,
+        val path: String? = null
     )
 
     enum class ActionType {
-        CREATE_FILE, EDIT_FILE, APPEND_FILE, CREATE_DIRECTORY, READ_FILE, LIST_FILES, RUN_SAFE_COMMAND, UNKNOWN
+        FILE,
+        EDIT_FILE,
+        APPEND_FILE,
+        MKDIR,
+        COMMAND,
+        BROWSER_OPEN
     }
 
-    fun parseActions(response: String): List<ParsedAction> {
+    private val fileRegex =
+        Regex(
+            """<file\s+path=["']([^"']+)["']>([\s\S]*?)</file>""",
+            RegexOption.IGNORE_CASE
+        )
+
+    private val editFileRegex =
+        Regex(
+            """<edit_file\s+path=["']([^"']+)["']>([\s\S]*?)</edit_file>""",
+            RegexOption.IGNORE_CASE
+        )
+
+    private val appendFileRegex =
+        Regex(
+            """<append_file\s+path=["']([^"']+)["']>([\s\S]*?)</append_file>""",
+            RegexOption.IGNORE_CASE
+        )
+
+    private val mkdirRegex =
+        Regex(
+            """<mkdir\s+path=["']([^"']+)["']\s*/?>""",
+            RegexOption.IGNORE_CASE
+        )
+
+    private val commandRegex =
+        Regex(
+            """<command>([\s\S]*?)</command>""",
+            RegexOption.IGNORE_CASE
+        )
+
+    private val browserRegex =
+        Regex(
+            """<browser_open>([\s\S]*?)</browser_open>""",
+            RegexOption.IGNORE_CASE
+        )
+
+    fun parse(text: String): List<ParsedAction> {
+
         val actions = mutableListOf<ParsedAction>()
-        
-        // Parse <file path="...">...</file>
-        val fileRegex = "<file\\s+path=\"([^\"]+)\">([\\s\\S]*?)</file>".toRegex()
-        fileRegex.findAll(response).forEach { matchResult ->
-            actions.add(ParsedAction(ActionType.CREATE_FILE, matchResult.groupValues[1], matchResult.groupValues[2]))
+
+        fileRegex.findAll(text).forEach { match ->
+            actions += ParsedAction(
+                type = ActionType.FILE,
+                path = match.groupValues[1].trim(),
+                content = match.groupValues[2].trim()
+            )
         }
-        
-        // Parse <edit_file path="...">...</edit_file>
-        val editFileRegex = "<edit_file\\s+path=\"([^\"]+)\">([\\s\\S]*?)</edit_file>".toRegex()
-        editFileRegex.findAll(response).forEach { matchResult ->
-            actions.add(ParsedAction(ActionType.EDIT_FILE, matchResult.groupValues[1], matchResult.groupValues[2]))
+
+        editFileRegex.findAll(text).forEach { match ->
+            actions += ParsedAction(
+                type = ActionType.EDIT_FILE,
+                path = match.groupValues[1].trim(),
+                content = match.groupValues[2].trim()
+            )
         }
-        
-        // Parse <append_file path="...">...</append_file>
-        val appendFileRegex = "<append_file\\s+path=\"([^\"]+)\">([\\s\\S]*?)</append_file>".toRegex()
-        appendFileRegex.findAll(response).forEach { matchResult ->
-            actions.add(ParsedAction(ActionType.APPEND_FILE, matchResult.groupValues[1], matchResult.groupValues[2]))
+
+        appendFileRegex.findAll(text).forEach { match ->
+            actions += ParsedAction(
+                type = ActionType.APPEND_FILE,
+                path = match.groupValues[1].trim(),
+                content = match.groupValues[2].trim()
+            )
         }
-        
-        // Parse <mkdir path="..."/>
-        val mkdirRegex = "<mkdir\\s+path=\"([^\"]+)\"\\s*/>".toRegex()
-        mkdirRegex.findAll(response).forEach { matchResult ->
-            actions.add(ParsedAction(ActionType.CREATE_DIRECTORY, matchResult.groupValues[1], null))
+
+        mkdirRegex.findAll(text).forEach { match ->
+            actions += ParsedAction(
+                type = ActionType.MKDIR,
+                path = match.groupValues[1].trim(),
+                content = match.groupValues[1].trim()
+            )
         }
-        
-        // Parse <command>...</command>
-        val cmdRegex = "<command>([\\s\\S]*?)</command>".toRegex()
-        cmdRegex.findAll(response).forEach { matchResult ->
-            actions.add(ParsedAction(ActionType.RUN_SAFE_COMMAND, null, matchResult.groupValues[1].trim()))
+
+        commandRegex.findAll(text).forEach { match ->
+            val command = match.groupValues[1].trim()
+
+            if (command.isNotBlank()) {
+                actions += ParsedAction(
+                    type = ActionType.COMMAND,
+                    content = command
+                )
+            }
         }
-        
+
+        browserRegex.findAll(text).forEach { match ->
+            val url = match.groupValues[1].trim()
+
+            if (url.isNotBlank()) {
+                actions += ParsedAction(
+                    type = ActionType.BROWSER_OPEN,
+                    content = url
+                )
+            }
+        }
+
         return actions
     }
 
-    fun executeAction(action: ParsedAction, projectRoot: File): String {
-        Log.d("BypassIDE", "executeAction called: \${action.type} in root \${projectRoot.absolutePath}")
-        return try {
+    /**
+     * Executes only the safe project-level actions.
+     *
+     * Workspace is intentionally kept inside the application's
+     * private project directory.
+     */
+    fun execute(
+        actions: List<ParsedAction>,
+        workspace: File
+    ): List<String> {
+
+        if (!workspace.exists()) {
+            workspace.mkdirs()
+        }
+
+        val results = mutableListOf<String>()
+
+        actions.forEach { action ->
+
             when (action.type) {
-                ActionType.CREATE_FILE, ActionType.EDIT_FILE -> {
-                    if (action.path != null && action.content != null) {
-                        Log.d("BypassIDE", "AI action path requested: \${action.path}")
-                        var safePath = action.path.trim()
-                        if (safePath.startsWith("/")) safePath = safePath.removePrefix("/")
-                        if (safePath.startsWith("app/")) safePath = safePath.removePrefix("app/")
-                        
-                        val file = File(projectRoot, safePath).canonicalFile
-                        Log.d("BypassIDE", "Resolved physical file path: \${file.absolutePath}")
-                        if (!file.path.startsWith(projectRoot.canonicalPath)) {
-                            Log.d("BypassIDE", "Failed: Path escapes project root.")
-                            return "Failed: Path escapes project root. Attempted: \${file.path}"
-                        }
-                        file.parentFile?.mkdirs()
-                        file.writeText(action.content)
-                        Log.d("BypassIDE", "File creation result: Success")
-                        if (action.type == ActionType.CREATE_FILE) "Created file: \$safePath (at \${file.absolutePath})" else "Edited file: \$safePath (at \${file.absolutePath})"
+
+                ActionType.FILE -> {
+
+                    val file = safeFile(
+                        workspace,
+                        action.path ?: return@forEach
+                    )
+
+                    file.parentFile?.mkdirs()
+                    file.writeText(action.content)
+
+                    results +=
+                        "Created: ${relativePath(workspace, file)}"
+                }
+
+                ActionType.EDIT_FILE -> {
+
+                    val file = safeFile(
+                        workspace,
+                        action.path ?: return@forEach
+                    )
+
+                    if (!file.exists()) {
+                        results +=
+                            "Edit failed: ${relativePath(workspace, file)} does not exist."
                     } else {
-                        Log.d("BypassIDE", "Failed to create/edit file: Missing path or content")
-                        "Failed to create/edit file: Missing path or content"
+                        file.writeText(action.content)
+
+                        results +=
+                            "Edited: ${relativePath(workspace, file)}"
                     }
                 }
+
                 ActionType.APPEND_FILE -> {
-                    if (action.path != null && action.content != null) {
-                        Log.d("BypassIDE", "AI action path requested: \${action.path}")
-                        var safePath = action.path.trim()
-                        if (safePath.startsWith("/")) safePath = safePath.removePrefix("/")
-                        if (safePath.startsWith("app/")) safePath = safePath.removePrefix("app/")
-                        
-                        val file = File(projectRoot, safePath).canonicalFile
-                        Log.d("BypassIDE", "Resolved physical file path: \${file.absolutePath}")
-                        if (!file.path.startsWith(projectRoot.canonicalPath)) return "Failed: Path escapes project root. Attempted: \${file.path}"
-                        file.parentFile?.mkdirs()
-                        file.appendText(action.content)
-                        "Appended to file: \$safePath (at \${file.absolutePath})"
-                    } else "Failed to append to file: Missing path or content"
+
+                    val file = safeFile(
+                        workspace,
+                        action.path ?: return@forEach
+                    )
+
+                    file.parentFile?.mkdirs()
+
+                    file.appendText(
+                        if (file.exists()) {
+                            "\n${action.content}"
+                        } else {
+                            action.content
+                        }
+                    )
+
+                    results +=
+                        "Appended: ${relativePath(workspace, file)}"
                 }
-                ActionType.CREATE_DIRECTORY -> {
-                    if (action.path != null) {
-                        Log.d("BypassIDE", "AI action path requested: \${action.path}")
-                        var safePath = action.path.trim()
-                        if (safePath.startsWith("/")) safePath = safePath.removePrefix("/")
-                        if (safePath.startsWith("app/")) safePath = safePath.removePrefix("app/")
-                        
-                        val dir = File(projectRoot, safePath).canonicalFile
-                        Log.d("BypassIDE", "Resolved physical dir path: \${dir.absolutePath}")
-                        if (!dir.path.startsWith(projectRoot.canonicalPath)) return "Failed: Path escapes project root. Attempted: \${dir.path}"
-                        dir.mkdirs()
-                        "Created directory: \$safePath (at \${dir.absolutePath})"
-                    } else "Failed to create directory: Missing path"
+
+                ActionType.MKDIR -> {
+
+                    val directory = safeFile(
+                        workspace,
+                        action.path ?: return@forEach
+                    )
+
+                    directory.mkdirs()
+
+                    results +=
+                        "Created directory: ${relativePath(workspace, directory)}"
                 }
-                ActionType.RUN_SAFE_COMMAND -> {
-                    if (action.content != null) {
-                        val process = ProcessBuilder()
-                            .command("sh", "-c", action.content)
-                            .directory(projectRoot)
-                            .redirectErrorStream(true)
-                            .start()
-                        
-                        val output = process.inputStream.bufferedReader().readText()
-                        process.waitFor()
-                        "Executed: \${action.content}\nOutput: \$output"
-                    } else "Failed to execute command: Missing content"
+
+                ActionType.COMMAND -> {
+
+                    val command = action.content.trim()
+
+                    /*
+                     * Preview is handled directly instead of being
+                     * passed to a shell. This fixes the old
+                     * ${action.content}/$output placeholder bug.
+                     */
+                    if (command.startsWith("preview ", ignoreCase = true)) {
+
+                        val requested =
+                            command.substringAfter("preview ")
+                                .trim()
+
+                        val htmlFile =
+                            if (requested.isBlank()) {
+                                File(workspace, "index.html")
+                            } else {
+                                safeFile(workspace, requested)
+                            }
+
+                        if (htmlFile.exists() && htmlFile.isFile) {
+
+                            results +=
+                                "PREVIEW_READY:${htmlFile.absolutePath}"
+
+                        } else {
+
+                            results +=
+                                "Preview file not found: ${htmlFile.absolutePath}"
+                        }
+
+                    } else {
+
+                        /*
+                         * Safe basic commands used by the IDE UI.
+                         * Arbitrary shell/root execution is intentionally
+                         * not performed here.
+                         */
+                        when (command) {
+
+                            "pwd" -> {
+                                results += workspace.absolutePath
+                            }
+
+                            "ls" -> {
+                                results +=
+                                    workspace.listFiles()
+                                        ?.joinToString("\n") {
+                                            it.name
+                                        }
+                                        ?: ""
+                            }
+
+                            "ls -la" -> {
+                                results +=
+                                    workspace.listFiles()
+                                        ?.joinToString("\n") {
+                                            if (it.isDirectory) {
+                                                "d ${it.name}"
+                                            } else {
+                                                "- ${it.name}"
+                                            }
+                                        }
+                                        ?: ""
+                            }
+
+                            else -> {
+                                results +=
+                                    "Command received: $command"
+                            }
+                        }
+                    }
                 }
-                else -> "Unknown or unsupported action type: \${action.type}"
+
+                ActionType.BROWSER_OPEN -> {
+
+                    results +=
+                        "BROWSER_OPEN:${action.content}"
+                }
             }
-        } catch (e: Exception) {
-            "Error executing action \${action.type}: \${e.message}"
         }
+
+        return results
     }
 
-    fun getProjectContext(projectRoot: File?): String {
-        if (projectRoot == null || !projectRoot.exists()) return "No project loaded."
-        
-        val sb = java.lang.StringBuilder()
-        sb.append("Current Project Root: \${projectRoot.absolutePath}\\n\\n")
-        sb.append("File Structure:\\n")
-        
-        val allowedExtensions = listOf("kt", "java", "xml", "html", "css", "js", "json", "md", "txt", "gradle", "kts", "toml", "properties")
-        
-        fun walk(dir: File, indent: String) {
-            dir.listFiles()?.sortedBy { it.name }?.forEach { file ->
-                if (file.name == "build" || file.name == ".gradle" || file.name == ".idea" || file.name == "node_modules") return@forEach
-                if (file.isDirectory) {
-                    sb.append("\$indent\${file.name}/\\n")
-                    walk(file, "$indent  ")
-                } else {
-                    sb.append("\$indent\${file.name}\\n")
-                }
-            }
+    private fun safeFile(
+        workspace: File,
+        relativePath: String
+    ): File {
+
+        val cleanPath =
+            relativePath
+                .replace("\\", "/")
+                .trimStart('/')
+
+        val root =
+            workspace.canonicalFile
+
+        val file =
+            File(root, cleanPath).canonicalFile
+
+        if (
+            file != root &&
+            !file.path.startsWith(root.path + File.separator)
+        ) {
+            throw SecurityException(
+                "Unsafe project path: $relativePath"
+            )
         }
-        walk(projectRoot, "")
-        
-        sb.append("\\n\\nFile Contents (limited):\\n")
-        var filesRead = 0
-        projectRoot.walkTopDown()
-            .onEnter { it.name != "build" && it.name != ".gradle" && it.name != ".idea" && it.name != "node_modules" }
-            .filter { it.isFile && allowedExtensions.contains(it.extension) }
-            .take(10) // Limit to 10 files
-            .forEach { file ->
-                if (filesRead > 10) return@forEach
-                val relativePath = file.relativeTo(projectRoot).path
-                sb.append("--- \$relativePath ---\\n")
-                val content = file.readText().take(2000) // Limit content size
-                sb.append(content)
-                if (file.length() > 2000) sb.append("\\n... (truncated)\\n")
-                sb.append("\\n\\n")
-                filesRead++
-            }
-            
-        return sb.toString()
+
+        return file
+    }
+
+    private fun relativePath(
+        workspace: File,
+        file: File
+    ): String {
+
+        return try {
+            file.canonicalFile
+                .relativeTo(workspace.canonicalFile)
+                .path
+        } catch (_: Exception) {
+            file.name
+        }
     }
 }
