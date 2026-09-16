@@ -70,7 +70,7 @@ object AppState {
 @Composable
 fun FilesScreen(onNavigateToEditor: () -> Unit) {
     val context = LocalContext.current
-    val rootDir = remember { AppState.aiSession?.workspace ?: File(context.getExternalFilesDir(null), "BypassProjects").apply { mkdirs() } }
+    val rootDir = remember { File(context.filesDir, "BypassProjects").apply { mkdirs() } }
     var currentDir by remember { mutableStateOf(rootDir) }
     var files by remember { mutableStateOf(currentDir.listFiles()?.toList()?.sortedWith(compareBy({ !it.isDirectory }, { it.name })) ?: emptyList()) }
     

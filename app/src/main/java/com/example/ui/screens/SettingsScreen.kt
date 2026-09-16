@@ -5,221 +5,101 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.platform.LocalContext
-import com.example.ai.AiProviderState
-import com.example.ai.AiSession
 import com.example.ui.theme.*
+
+import com.example.ai.AiSession
+import com.example.ai.AiProviderState
+import androidx.compose.ui.platform.LocalContext
 
 @Composable
 fun SettingsScreen() {
-
     val context = LocalContext.current
-
-    val aiSession = remember {
-        AppState.aiSession
-            ?: AiSession(context).also {
-                AppState.aiSession = it
-            }
+    val aiSession = remember { 
+        AppState.aiSession ?: AiSession(context).also { AppState.aiSession = it }
     }
+    
+    var apiKeyInput by remember { mutableStateOf(aiSession.apiKey) }
+    var selectedProviderState by remember { mutableStateOf(aiSession.selectedProviderState) }
 
-    var apiKey by remember {
-        mutableStateOf(aiSession.apiKey)
-    }
-
-    var geminiEnabled by remember {
-        mutableStateOf(
-            aiSession.selectedProviderState ==
-                AiProviderState.GEMINI
-        )
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(BgColor)
-            .padding(16.dp)
-    ) {
-
-        Text(
-            "SETTINGS",
-            color = CyanAccent,
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Bold
-        )
-
-        Spacer(Modifier.height(24.dp))
-
-        Text(
-            "GEMINI AI",
-            color = PrimaryTextColor,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold
-        )
-
-        Spacer(Modifier.height(10.dp))
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    SurfaceColor,
-                    RoundedCornerShape(12.dp)
-                )
-                .padding(16.dp)
-        ) {
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement =
-                    Arrangement.SpaceBetween
-            ) {
-                Text(
-                    "Use Gemini AI",
-                    color = PrimaryTextColor
-                )
-
-                Switch(
-                    checked = geminiEnabled,
-                    onCheckedChange = { enabled ->
-
-                        geminiEnabled = enabled
-
-                        if (enabled) {
-                            aiSession.activateGemini(apiKey)
-                        } else {
-                            aiSession.activateMock()
-                        }
+    Column(modifier = Modifier.fillMaxSize().background(BgColor).padding(16.dp)) {
+        Text("SETTINGS", color = CyanAccent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(24.dp))
+        
+        // AI Model
+        Text("AI Configuration", color = PrimaryTextColor, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(8.dp))
+        
+        Box(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(SurfaceColor).padding(16.dp)) {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(
+                        selected = selectedProviderState == AiProviderState.MOCK,
+                        onClick = {
+                            selectedProviderState = AiProviderState.MOCK
+                            aiSession.selectedProviderState = AiProviderState.MOCK
+                        },
+                        colors = RadioButtonDefaults.colors(selectedColor = CyanAccent)
+                    )
+                    Text("Mock AI Provider (Offline)", color = PrimaryTextColor)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(
+                        selected = selectedProviderState == AiProviderState.GEMINI,
+                        onClick = {
+                            selectedProviderState = AiProviderState.GEMINI
+                            aiSession.selectedProviderState = AiProviderState.GEMINI
+                        },
+                        colors = RadioButtonDefaults.colors(selectedColor = CyanAccent)
+                    )
+                    Text("Gemini 1.5 Pro", color = PrimaryTextColor)
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("Gemini API Key:", color = PrimaryTextColor)
+                OutlinedTextField(
+                    value = apiKeyInput,
+                    onValueChange = { 
+                        apiKeyInput = it
+                        aiSession.apiKey = it
                     },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = CyanAccent
-                    )
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(focusedTextColor = PrimaryTextColor, unfocusedTextColor = PrimaryTextColor)
                 )
+                Text("A real provider requires connecting a valid API key.", color = MutedTextColor, fontSize = 12.sp)
             }
-
-            Spacer(Modifier.height(16.dp))
-
-            Text(
-                "Gemini API Key",
-                color = PrimaryTextColor,
-                fontWeight = FontWeight.Bold
-            )
-
-            Spacer(Modifier.height(8.dp))
-
-            OutlinedTextField(
-                value = apiKey,
-                onValueChange = {
-                    apiKey = it
-                    aiSession.apiKey = it
-
-                    if (it.isNotBlank()) {
-                        geminiEnabled = true
-                        aiSession.selectedProviderState =
-                            AiProviderState.GEMINI
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                placeholder = {
-                    Text(
-                        "Paste Gemini API key",
-                        color = MutedTextColor
-                    )
-                },
-                colors =
-                    OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = PrimaryTextColor,
-                        unfocusedTextColor = PrimaryTextColor,
-                        focusedBorderColor = CyanAccent,
-                        unfocusedBorderColor =
-                            SurfaceVariantColor
-                    )
-            )
-
-            Spacer(Modifier.height(8.dp))
-
-            Text(
-                if (aiSession.apiKey.isNotBlank())
-                    "✓ Gemini API key saved"
-                else
-                    "Add your Gemini API key to enable real AI.",
-                color = if (aiSession.apiKey.isNotBlank())
-                    CyanAccent
-                else
-                    MutedTextColor,
-                fontSize = 12.sp
-            )
         }
-
-        Spacer(Modifier.height(24.dp))
-
-        Text(
-            "IDE SETTINGS",
-            color = PrimaryTextColor,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold
-        )
-
-        Spacer(Modifier.height(10.dp))
-
+        
+        Spacer(modifier = Modifier.height(24.dp))
+        
+        // IDE Settings
+        Text("IDE Settings", color = PrimaryTextColor, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(8.dp))
+        
         var reasoning by remember { mutableStateOf(false) }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    SurfaceColor,
-                    RoundedCornerShape(10.dp)
-                )
-                .padding(16.dp),
-            horizontalArrangement =
-                Arrangement.SpaceBetween
-        ) {
-            Text(
-                "Reasoning / Thinking",
-                color = PrimaryTextColor
-            )
-
-            Switch(
-                checked = reasoning,
-                onCheckedChange = {
-                    reasoning = it
-                }
-            )
+        Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(SurfaceColor).padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Reasoning / Thinking Level", color = PrimaryTextColor)
+            Switch(checked = reasoning, onCheckedChange = { reasoning = it }, colors = SwitchDefaults.colors(checkedThumbColor = CyanAccent, checkedTrackColor = SurfaceVariantColor))
         }
-
-        Spacer(Modifier.height(8.dp))
-
-        var grounding by remember {
-            mutableStateOf(false)
+        
+        Spacer(modifier = Modifier.height(8.dp))
+        var searchGrounding by remember { mutableStateOf(false) }
+        Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(SurfaceColor).padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Live Web Search Grounding", color = PrimaryTextColor)
+            Switch(checked = searchGrounding, onCheckedChange = { searchGrounding = it }, colors = SwitchDefaults.colors(checkedThumbColor = CyanAccent, checkedTrackColor = SurfaceVariantColor))
         }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    SurfaceColor,
-                    RoundedCornerShape(10.dp)
-                )
-                .padding(16.dp),
-            horizontalArrangement =
-                Arrangement.SpaceBetween
-        ) {
-            Text(
-                "Live Web Search Grounding",
-                color = PrimaryTextColor
-            )
-
-            Switch(
-                checked = grounding,
-                onCheckedChange = {
-                    grounding = it
-                }
-            )
+        
+        Spacer(modifier = Modifier.height(24.dp))
+        
+        Text("System", color = PrimaryTextColor, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(8.dp))
+        Button(onClick = { /* mock reset */ }, colors = ButtonDefaults.buttonColors(containerColor = SurfaceVariantColor)) {
+            Text("Reset IP / Network Context", color = CyanAccent)
         }
     }
 }

@@ -1,195 +1,245 @@
 package com.example.ui.screens
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.ai.ActionParser
-import com.example.ai.AiMessage
-import com.example.ai.AiSession
+import androidx.compose.ui.unit.sp
+import com.example.ui.theme.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+import com.example.ai.AiMessage
+import com.example.ai.AiSession
+import com.example.ai.ActionParser
+import androidx.compose.ui.platform.LocalContext
+import java.io.File
+
 @Composable
-fun HomeScreen(
-    aiSession: AiSession,
-    onOpenPreview: (() -> Unit)? = null
-) {
-    var prompt by remember { mutableStateOf("") }
-    var isThinking by remember { mutableStateOf(false) }
-    val messages = aiSession.chatHistory
-    val scope = rememberCoroutineScope()
+fun HomeScreen() {
+    val context = LocalContext.current
+    val aiSession = remember { 
+        AppState.aiSession ?: AiSession(context).also { AppState.aiSession = it }
+    }
+    
+    var promptText by remember { mutableStateOf("") }
+    val coroutineScope = rememberCoroutineScope()
+    val provider by aiSession.provider.collectAsState()
+    
+    val projectDir = File(context.filesDir, "BypassProjects").apply { mkdirs() }
+    
+    fun sendMessage() {
+        if (promptText.isBlank()) return
+        val userMsg = promptText
+        promptText = ""
+        aiSession.chatHistory.add(AiMessage(userMsg, isUser = true))
+        
+        // Add loading state
+        aiSession.chatHistory.add(AiMessage("Thinking...", isUser = false, isLoading = true))
+        
+        coroutineScope.launch {
+            val projectContext = ActionParser.getProjectContext(projectDir)
+            val response = provider.generateResponse(aiSession.chatHistory.toList(), projectContext)
+            
+            // Replace loading with response
+            aiSession.chatHistory.removeAt(aiSession.chatHistory.size - 1)
+            
+            if (response.isError) {
+                 aiSession.chatHistory.add(AiMessage(response.text, isUser = false, isError = true))
+            } else {
+                 val parsedActions = ActionParser.parseActions(response.text)
+                 var actionResults = ""
+                 if (parsedActions.isNotEmpty()) {
+                     for (action in parsedActions) {
+                         val res = ActionParser.executeAction(action, projectDir)
+                         actionResults += "$res\n"
+                     }
+                     AppState.fileUpdateTrigger++
+                 }
+                 
+                 val displayText = if (actionResults.isNotEmpty()) {
+                     "${response.text}\n\nExecution Results:\n$actionResults"
+                 } else {
+                     response.text
+                 }
+                 aiSession.chatHistory.add(AiMessage(displayText, isUser = false))
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
+            .background(BgColor)
     ) {
-        Text(
-            text = "BYPASS IDE",
-            style = MaterialTheme.typography.headlineSmall
-        )
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        Text(
-            text = "Advanced Root AI Engine",
-            style = MaterialTheme.typography.bodyMedium
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Card(
-            modifier = Modifier.fillMaxWidth()
+        // Header
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(
-                modifier = Modifier.padding(12.dp)
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(SurfaceColor),
+                contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = "Standard mode active",
-                    style = MaterialTheme.typography.titleSmall
-                )
-
-                Text(
-                    text = "Grant root for full POSIX & Termux execution.",
-                    style = MaterialTheme.typography.bodySmall
-                )
+                Text("B", color = PurpleAccent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            Column {
+                Text("BYPASS IDE", color = PrimaryTextColor, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text("Advanced Root AI Engine", color = CyanAccent, fontSize = 10.sp)
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
-
+        // Chat History
         LazyColumn(
             modifier = Modifier
+                .weight(1f)
                 .fillMaxWidth()
-                .weight(1f),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            items(messages) { message ->
-                Card(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = message.text,
-                        modifier = Modifier.padding(12.dp)
-                    )
-                }
-            }
-
-            if (isThinking) {
+            if (aiSession.chatHistory.isEmpty()) {
                 item {
-                    Text(
-                        text = "Thinking...",
-                        modifier = Modifier.padding(8.dp)
-                    )
+                    Column(
+                        modifier = Modifier.fillParentMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = "Architect full-stack apps, write root utilities, and execute direct OS commands autonomously.",
+                            color = MutedTextColor,
+                            fontSize = 14.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+                    }
+                }
+            } else {
+                items(aiSession.chatHistory) { msg ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = if (msg.isUser) Arrangement.End else Arrangement.Start
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (msg.isUser) SurfaceColor else Color.Transparent)
+                                .border(1.dp, if (msg.isUser) SurfaceVariantColor else Color.Transparent, RoundedCornerShape(12.dp))
+                                .padding(12.dp)
+                                .widthIn(max = 300.dp)
+                        ) {
+                            if (msg.isLoading) {
+                                Text("Thinking...", color = PurpleAccent, fontSize = 14.sp)
+                            } else {
+                                Text(msg.text, color = PrimaryTextColor, fontSize = 14.sp)
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        // Bottom Input Area
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                .border(1.dp, SurfaceVariantColor, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                .background(SurfaceColor)
+                .padding(16.dp)
         ) {
-            OutlinedTextField(
-                value = prompt,
-                onValueChange = { prompt = it },
-                modifier = Modifier.weight(1f),
-                placeholder = {
-                    Text("Ask Bypass AI anything...")
-                },
-                enabled = !isThinking,
-                maxLines = 4
-            )
-
-            Button(
-                onClick = {
-                    val userPrompt = prompt.trim()
-
-                    if (userPrompt.isEmpty() || isThinking) {
-                        return@Button
-                    }
-
-                    prompt = ""
-                    isThinking = true
-
-                    scope.launch {
-                        try {
-                            val response =
-                                aiSession.generateResponse(userPrompt)
-
-                            val actions =
-                                ActionParser.parse(response)
-
-                            if (actions.isNotEmpty()) {
-                                val results =
-                                    ActionParser.execute(
-                                        actions = actions,
-                                        workspace = aiSession.workspace
-                                    )
-
-                                if (results.isNotEmpty()) {
-                                    aiSession.chatHistory.add(
-                                        AiMessage(
-                                            text = results.joinToString("\n"),
-                                            isUser = false
-                                        )
-                                    )
-                                }
-
-                                if (
-                                    results.any {
-                                        it.startsWith("PREVIEW_READY:")
-                                    }
-                                ) {
-                                    onOpenPreview?.invoke()
-                                }
-                            }
-
-                            val lowerPrompt = userPrompt.lowercase()
-
-                            if (
-                                lowerPrompt.contains("preview") ||
-                                lowerPrompt.contains("live preview")
-                            ) {
-                                onOpenPreview?.invoke()
-                            }
-
-                        } catch (e: Exception) {
-                            aiSession.chatHistory.add(
-                                AiMessage(
-                                    text = "Error: ${e.message ?: "Unknown error"}",
-                                    isUser = false,
-                                    isError = true
-                                )
-                            )
-                        } finally {
-                            isThinking = false
-                        }
-                    }
-                },
-                enabled = !isThinking
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Send")
+                OutlinedTextField(
+                    value = promptText,
+                    onValueChange = { promptText = it },
+                    placeholder = { Text("Build apps, create websites, or write code...", color = MutedTextColor) },
+                    modifier = Modifier.weight(1f),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color.Transparent,
+                        unfocusedBorderColor = Color.Transparent,
+                        focusedTextColor = PrimaryTextColor,
+                        unfocusedTextColor = PrimaryTextColor
+                    )
+                )
+
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    IconButton(
+                        onClick = { /* Voice Diagnostics UI could be triggered here */ },
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(SurfaceVariantColor)
+                    ) {
+                        Icon(Icons.Default.Mic, contentDescription = "Voice", tint = CyanAccent)
+                    }
+
+                    IconButton(
+                        onClick = { sendMessage() },
+                        enabled = promptText.isNotBlank(),
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(if (promptText.isNotBlank()) CyanAccent else SurfaceVariantColor)
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", tint = if (promptText.isNotBlank()) BgColor else MutedTextColor)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(BgColor)
+                        .border(1.dp, SurfaceVariantColor, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Star, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(provider.name, color = PrimaryTextColor, fontSize = 12.sp)
+                }
+
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(BgColor)
+                        .border(1.dp, SurfaceVariantColor, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("< >", color = CyanAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Builder", color = PrimaryTextColor, fontSize = 12.sp)
+                }
             }
         }
     }
