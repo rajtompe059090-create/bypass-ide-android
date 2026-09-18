@@ -38,7 +38,7 @@ fun HomeScreen(onNavigateToBuilder: () -> Unit = {}) {
     }
     
     var promptText by remember { mutableStateOf("") }
-    val provider = aiSession.provider
+    val provider by aiSession.provider.collectAsState()
 
     fun sendMessage() {
         if (promptText.isBlank()) return
@@ -53,7 +53,7 @@ fun HomeScreen(onNavigateToBuilder: () -> Unit = {}) {
             val projectDir = AppState.currentFile?.parentFile ?: bypassProjectsRoot
             
             val projectContext = ActionParser.getProjectContext(projectDir)
-            val response = provider.sendMessage(text, aiSession.chatHistory.toList(), projectContext)
+            val response = provider.generateResponse(aiSession.chatHistory.toList(), projectContext)
             
             // Replace loading with response
             aiSession.chatHistory.removeAt(aiSession.chatHistory.size - 1)
