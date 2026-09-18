@@ -34,6 +34,7 @@ fun PreviewScreen() {
         dir ?: bypassProjectsRoot
     }
 
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
     Column(modifier = Modifier.fillMaxSize().background(BgColor)) {
         // Toolbar
         Row(
@@ -41,8 +42,10 @@ fun PreviewScreen() {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text("LIVE PREVIEW", color = CyanAccent, fontSize = 14.sp)
-            var webViewRef by remember { mutableStateOf<WebView?>(null) }
+            Column {
+                Text("LIVE PREVIEW", color = CyanAccent, fontSize = 14.sp)
+                Text("http://127.0.0.1:8080/", color = MutedTextColor, fontSize = 10.sp)
+            }
             IconButton(onClick = { webViewRef?.reload() }) {
                 Icon(Icons.Default.Refresh, contentDescription = "Reload", tint = CyanAccent)
             }
@@ -55,6 +58,7 @@ fun PreviewScreen() {
                 AndroidView(
                     factory = { ctx ->
                         WebView(ctx).apply {
+                            webViewRef = this
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
                             settings.allowFileAccess = true

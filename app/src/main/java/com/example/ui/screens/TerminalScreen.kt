@@ -102,7 +102,7 @@ fun TerminalScreen() {
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            val cmds = listOf("ls -la", "pwd", "date", "echo 'Hello'")
+            val cmds = listOf("ls -la", "pwd", "node -v", "python3 --version", "git status")
             cmds.forEach { cmd ->
                 Box(
                     modifier = Modifier

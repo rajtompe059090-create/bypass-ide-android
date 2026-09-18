@@ -8,8 +8,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -17,44 +17,43 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.ui.theme.*
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-
 import com.example.ai.AiMessage
 import com.example.ai.AiSession
 import com.example.ai.ActionParser
-import androidx.compose.ui.platform.LocalContext
+import com.example.ui.theme.*
+import kotlinx.coroutines.launch
 import java.io.File
 
 @Composable
-fun HomeScreen() {
+fun HomeScreen(onNavigateToBuilder: () -> Unit = {}) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    
     val aiSession = remember { 
-        AppState.aiSession ?: AiSession(context).also { AppState.aiSession = it }
+         AppState.aiSession ?: AiSession(context).also { AppState.aiSession = it }
     }
     
     var promptText by remember { mutableStateOf("") }
-    val coroutineScope = rememberCoroutineScope()
-    val provider by aiSession.provider.collectAsState()
-    
-    val projectDir = File(context.filesDir, "BypassProjects").apply { mkdirs() }
-    
+    val provider = aiSession.provider
+
     fun sendMessage() {
         if (promptText.isBlank()) return
-        val userMsg = promptText
+        val text = promptText
         promptText = ""
-        aiSession.chatHistory.add(AiMessage(userMsg, isUser = true))
         
-        // Add loading state
-        aiSession.chatHistory.add(AiMessage("Thinking...", isUser = false, isLoading = true))
+        aiSession.chatHistory.add(AiMessage(text, isUser = true))
+        aiSession.chatHistory.add(AiMessage("", isUser = false, isLoading = true))
         
         coroutineScope.launch {
+            val bypassProjectsRoot = File(context.filesDir, "BypassProjects").apply { mkdirs() }
+            val projectDir = AppState.currentFile?.parentFile ?: bypassProjectsRoot
+            
             val projectContext = ActionParser.getProjectContext(projectDir)
-            val response = provider.generateResponse(aiSession.chatHistory.toList(), projectContext)
+            val response = provider.sendMessage(text, aiSession.chatHistory.toList(), projectContext)
             
             // Replace loading with response
             aiSession.chatHistory.removeAt(aiSession.chatHistory.size - 1)
@@ -87,28 +86,7 @@ fun HomeScreen() {
             .fillMaxSize()
             .background(BgColor)
     ) {
-        // Header
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(SurfaceColor),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("B", color = PurpleAccent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            }
-            Spacer(modifier = Modifier.width(16.dp))
-            Column {
-                Text("BYPASS IDE", color = PrimaryTextColor, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                Text("Advanced Root AI Engine", color = CyanAccent, fontSize = 10.sp)
-            }
-        }
-
-        // Chat History
+        // Chat History / Main Content
         LazyColumn(
             modifier = Modifier
                 .weight(1f)
@@ -116,10 +94,38 @@ fun HomeScreen() {
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+                // Welcome Section
+                Text("Welcome back, Root", color = PrimaryTextColor, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // Dashboard Elements
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).background(CyanAccent).padding(16.dp).clickable { onNavigateToBuilder() }) {
+                        Text("Start Coding >", color = BgColor, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Text("Recent Projects", color = MutedTextColor, fontSize = 14.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(SurfaceColor).padding(16.dp).clickable { onNavigateToBuilder() }) {
+                    Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                        Text("RajTest", color = PrimaryTextColor, fontWeight = FontWeight.Bold)
+                        Text("2 mins ago", color = MutedTextColor, fontSize = 12.sp)
+                    }
+                }
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                Text("Chat Assistant", color = MutedTextColor, fontSize = 14.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            
             if (aiSession.chatHistory.isEmpty()) {
                 item {
                     Column(
-                        modifier = Modifier.fillParentMaxSize(),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
@@ -182,7 +188,6 @@ fun HomeScreen() {
                         unfocusedTextColor = PrimaryTextColor
                     )
                 )
-
                 Column(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -195,7 +200,6 @@ fun HomeScreen() {
                     ) {
                         Icon(Icons.Default.Mic, contentDescription = "Voice", tint = CyanAccent)
                     }
-
                     IconButton(
                         onClick = { sendMessage() },
                         enabled = promptText.isNotBlank(),
@@ -208,9 +212,7 @@ fun HomeScreen() {
                     }
                 }
             }
-
             Spacer(modifier = Modifier.height(16.dp))
-
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -227,12 +229,12 @@ fun HomeScreen() {
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(provider.name, color = PrimaryTextColor, fontSize = 12.sp)
                 }
-
                 Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(12.dp))
                         .background(BgColor)
                         .border(1.dp, SurfaceVariantColor, RoundedCornerShape(12.dp))
+                        .clickable { onNavigateToBuilder() }
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {

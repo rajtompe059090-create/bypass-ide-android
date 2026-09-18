@@ -66,13 +66,14 @@ fun BypassApp() {
             startDestination = Screen.Home.route,
             modifier = Modifier.padding(innerPadding)
         ) {
-            composable(Screen.Home.route) { HomeScreen() }
+            composable(Screen.Home.route) { HomeScreen(onNavigateToBuilder = { navController.navigate(Screen.Builder.route) }) }
             composable(Screen.Files.route) { FilesScreen(onNavigateToEditor = { navController.navigate(Screen.Editor.route) }) }
             composable(Screen.Editor.route) { EditorScreen() }
             composable(Screen.Terminal.route) { TerminalScreen() }
             composable(Screen.Preview.route) { PreviewScreen() }
             composable(Screen.Dev.route) { DevScreen() }
             composable(Screen.Settings.route) { SettingsScreen() }
+            composable(Screen.Builder.route) { BuilderScreen() }
         }
     }
 }
